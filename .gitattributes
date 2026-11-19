@@ -2,3 +2,5 @@
 *.rs text
 *.md text
 *.png binary
+*.bat text eol=crlf
+*.iss text eol=crlf
