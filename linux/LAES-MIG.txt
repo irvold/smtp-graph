@@ -1,0 +1,104 @@
+SMTP-Graph til Linux
+====================
+
+SMTP-Graph tager imod mail fra scannere og printere (SMTP) og sender dem videre gennem
+Microsoft 365 (Microsoft Graph). Linux-udgaven er den samme motor som Windows-tjenesten,
+men styres fra kommandolinjen og kører som systemd-tjeneste.
+
+Kræver 64-bit Linux med systemd, fx Ubuntu, Debian, Zorin, Fedora eller Raspberry Pi OS (64-bit).
+  x86_64  – almindelige pc'er og servere
+  aarch64 – Raspberry Pi 4/5 og andre ARM-maskiner med 64-bit system
+
+
+1. Pak ud og installér
+----------------------
+  tar xzf smtp-graph-*-linux-x86_64.tar.gz
+  cd smtp-graph-*-linux-x86_64
+  sudo ./smtp-graph installer
+
+Det kopierer programmet til /usr/local/bin/smtp-graph, opretter systembrugeren smtp-graph og
+lægger indstillingerne i /var/lib/smtp-graph/smtp-graph.toml. Tjenesten startes først, når
+Microsoft 365 er sat op (trin 3).
+
+
+2. Ret indstillingerne
+----------------------
+  sudo nano /var/lib/smtp-graph/smtp-graph.toml
+
+Sæt mindst tilladte_ip til scannerens adresse (eller nettet, fx "192.168.1.0/24").
+Filen forklarer alle indstillinger.
+
+
+3. Forbind til Microsoft 365
+----------------------------
+Log ind som administrator hos kunden (global administrator, eller program- og Exchange-administrator):
+
+  sudo smtp-graph opsaet --postkasse scanner@firma.dk --navn "Firma kontor" --opret-delt
+
+Programmet viser en lang adresse. Åbn den i en browser – det må gerne være på din egen pc – og
+log ind. Til sidst ender browseren på en side, der ikke kan vises (http://127.0.0.1:…/?code=…).
+Kopiér HELE adressen fra adresselinjen, indsæt den i terminalen og tryk Enter.
+
+Programmet opretter så en app hos kunden, der kun må sende fra den ene postkasse, og skriver
+adgangen ind i indstillingsfilen. Nye rettigheder i Exchange kan tage op til 2 timer.
+
+Uden administrator: log ind som selve postkassen (kræver licens):
+  sudo smtp-graph login
+
+
+4. Prøv det
+-----------
+  sudo smtp-graph tjek
+  sudo smtp-graph test --til dig@firma.dk --stor
+
+
+5. Start tjenesten
+------------------
+  sudo smtp-graph installer
+
+Kør samme kommando igen, hver gang indstillingerne er ændret (eller: sudo systemctl restart smtp-graph).
+Er ufw slået til, åbnes portene kun for adresserne i tilladte_ip. Ved en anden firewall skal
+TCP 25 (og evt. 587/465) åbnes for scanneren.
+
+
+6. Indstil scanneren
+--------------------
+  SMTP-server:  maskinens IP-adresse
+  Port:         25
+  Kryptering:   ingen eller STARTTLS (slå "valider servercertifikat" fra)
+  Login:        intet (adgangen styres af tilladte_ip)
+  Afsender:     hvad som helst – mailen sendes altid fra postkassen fra trin 3
+
+
+Daglig brug
+-----------
+  systemctl status smtp-graph          kører den?
+  journalctl -u smtp-graph -f          loggen, mens det sker
+  ls /var/lib/smtp-graph/log           daglige logfiler (gemmes i 60 dage)
+  sudo smtp-graph koe                  mails, der venter eller er opgivet
+
+Kommandoer med sudo kører automatisk som brugeren smtp-graph, så filerne får den rigtige ejer.
+
+
+Ny version
+----------
+Pak den nye udgave ud og kør  sudo ./smtp-graph installer  igen. Indstillinger, kø og log bliver liggende.
+
+
+Afinstallér
+-----------
+  sudo smtp-graph afinstaller
+
+Fjerner tjenesten og firewall-reglerne. Indstillinger, kø og log bliver liggende; kommandoen
+skriver, hvordan alt fjernes.
+
+
+Forskelle fra Windows
+---------------------
+- Ingen grafisk brugerflade – alt foregår med kommandoerne ovenfor.
+- TLS klares altid af den indbyggede motor (rustls). Den gamle-scanner-reserve med Windows' TLS
+  findes ikke på Linux. En scanner, der ikke kan moderne TLS, må sende uden kryptering på det
+  lokale net (låst med tilladte_ip). Nogle scannere (fx HP PageWide 477) prøver alligevel STARTTLS,
+  når serveren tilbyder det – sæt så  starttls = false  i indstillingsfilen og genstart tjenesten.
+
+Hjælp: support@irvold.dk

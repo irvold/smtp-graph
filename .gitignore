@@ -1,0 +1,10 @@
+/target/
+/udgivelse/
+# Lokale testindstillinger (indeholder hemmeligheder)
+/test-irvold/
+smtp-graph.toml
+graph-login.json
+*.pem
+koe/
+log/
+__pycache__/
