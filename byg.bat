@@ -7,7 +7,7 @@ if not exist udgivelse mkdir udgivelse
 copy /y target\release\smtp-graph.exe udgivelse\ >nul
 copy /y target\release\smtp-graph-gui.exe udgivelse\ >nul
 copy /y Opsaet-SmtpGraph.ps1 udgivelse\ >nul
-copy /y README.md udgivelse\ >nul
+copy /y README.da.md udgivelse\README.md >nul
 
 rem Version fra Cargo.toml (første linje, der starter med "version").
 for /f "tokens=2 delims==" %%v in ('findstr /b /c:"version" Cargo.toml') do if not defined VER set "VER=%%v"

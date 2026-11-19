@@ -27,7 +27,7 @@ for MAAL in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
     rm -rf "/tmp/$PAKKE" && mkdir -p "/tmp/$PAKKE"
     cp "target/$MAAL/release/smtp-graph" "/tmp/$PAKKE/"
     cp linux/LAES-MIG.txt "/tmp/$PAKKE/"
-    cp README.md "/tmp/$PAKKE/"
+    cp README.da.md "/tmp/$PAKKE/README.md"
     chmod 755 "/tmp/$PAKKE/smtp-graph"
     chmod 644 "/tmp/$PAKKE/LAES-MIG.txt" "/tmp/$PAKKE/README.md"
     tar -C /tmp -czf "$UD/$PAKKE.tar.gz" "$PAKKE"
