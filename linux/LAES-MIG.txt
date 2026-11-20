@@ -70,6 +70,22 @@ TCP 25 (og evt. 587/465) åbnes for scanneren.
   Afsender:     hvad som helst – mailen sendes altid fra postkassen fra trin 3
 
 
+Reserve (fx Gmail)
+------------------
+Kan Microsoft ikke sende, kan mailen gå gennem en anden SMTP-server. Tilføj sidst i
+/var/lib/smtp-graph/smtp-graph.toml (Gmail kræver en app-adgangskode):
+
+  [reserve]
+  server = "smtp.gmail.com"
+  port = 587
+  tls = "starttls"
+  bruger = "firma@gmail.com"
+  adgangskode = "abcd efgh ijkl mnop"
+  efter_minutter = 15
+
+Genstart (sudo systemctl restart smtp-graph), og prøv:  sudo smtp-graph test --til dig@firma.dk --reserve
+
+
 Daglig brug
 -----------
   systemctl status smtp-graph          kører den?

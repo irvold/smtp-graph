@@ -8,3 +8,6 @@ graph-login.json
 koe/
 log/
 __pycache__/
+# Adgangskoder
+gmail.txt
+*.txt.hemmelig

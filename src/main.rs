@@ -32,6 +32,9 @@ enum Kmd {
         /// Med en vedhæftning på ca. 5 MB (afprøver upload-vejen, kræver Mail.ReadWrite)
         #[arg(long)]
         stor: bool,
+        /// Send gennem reserven ([reserve], fx Gmail) i stedet for Microsoft
+        #[arg(long)]
+        reserve: bool,
     },
     /// Vis køen
     Koe,
@@ -134,15 +137,34 @@ fn main() -> Result<()> {
                 Ok(_) => println!("Login hos Microsoft: OK"),
                 Err(e) => println!("Login hos Microsoft: FEJL – {e}"),
             }
+            if cfg.reserve.aktiv() {
+                println!("Reserve:       {} (efter {} min)", cfg.reserve.beskrivelse(), cfg.reserve.efter_minutter);
+                let r = smtp_graph::reserve::Reserve::ny(&cfg.reserve, &cfg.smtp.vaertsnavn)?;
+                match rt.block_on(r.proev()) {
+                    Ok(_) => println!("Login hos reserven: OK"),
+                    Err(e) => println!("Login hos reserven: FEJL – {e}"),
+                }
+            } else {
+                println!("Reserve:       ingen");
+            }
             Ok(())
         }
-        Kmd::Test { til, stor } => {
+        Kmd::Test { til, stor, reserve } => {
             let mut cfg = Config::laes(&fil)?;
-            let a = cfg.graph_adgang()?;
-            let g = graph::Graph::ny(a, cfg.graph.login_url.clone(), cfg.graph.graph_url.clone());
             let raw = testmail(&til, stor);
             let rt = tokio::runtime::Runtime::new()?;
-            let r = rt.block_on(g.send(&raw, "", &[til.clone()], cfg.graph.afsender_navn.as_deref(), false));
+            let navn = cfg.graph.afsender_navn.clone();
+            let r = if reserve {
+                if !cfg.reserve.aktiv() {
+                    anyhow::bail!("der er ingen [reserve] i {}", cfg.fil.display());
+                }
+                let r = smtp_graph::reserve::Reserve::ny(&cfg.reserve, &cfg.smtp.vaertsnavn)?;
+                rt.block_on(r.send(&raw, "", &[til.clone()], navn.as_deref(), false))
+            } else {
+                let a = cfg.graph_adgang()?;
+                let g = graph::Graph::ny(a, cfg.graph.login_url.clone(), cfg.graph.graph_url.clone());
+                rt.block_on(g.send(&raw, "", &[til.clone()], navn.as_deref(), false))
+            };
             match r {
                 Ok(vej) => println!("Sendt til {til} ({vej}, {} kB)", raw.len() / 1024),
                 Err(e) => anyhow::bail!("{e}"),

@@ -48,6 +48,8 @@ Get the latest build from [Releases](https://github.com/irvold/smtp-graph/releas
 - **Recipient lock:** `tilladte_modtagere` can restrict delivery, e.g. to the company's own domain only.
 - **Disk queue with retries** after 1, 2, 5, 10 and 30 minutes, then hourly for 48 hours. Mail that
   is given up on goes to `koe\fejlet`, and `fejl_til` is notified.
+- **Fallback relay** (`[reserve]`): if Microsoft cannot send, mail goes through another SMTP server
+  instead, e.g. Gmail with an app password. See [Fallback relay](#fallback-relay-gmail-or-any-smtp-server).
 - **Dry-run mode** (`toerlob = true`): mail is stored in `koe\toerlob` instead of being sent.
 - **Daily log files** in `log\`, kept for 60 days. On Linux the log also goes to the journal.
 
@@ -75,6 +77,36 @@ your own, run `Opret-FaellesApp.ps1` once in your own tenant, then set `graph.fa
 configuration or change the constant. Customers see the app as an *unverified publisher* until the
 publisher is verified. Administrators can always consent to it; ordinary users can only if the
 tenant allows user consent.
+
+## Fallback relay (Gmail or any SMTP server)
+
+If Microsoft 365 cannot send (an outage, an expired secret, a revoked app), SMTP-Graph can hand the
+mail to another SMTP server instead.
+
+```toml
+[reserve]
+server = "smtp.gmail.com"
+port = 587
+tls = "starttls"            # "starttls" (587), "tls" (465) or "ingen" (none, local relays only)
+bruger = "company@gmail.com"
+adgangskode = "abcd efgh ijkl mnop"
+fra = "company@gmail.com"   # sender; empty = bruger
+efter_minutter = 15         # use the fallback once a mail has waited this long (0 = at once)
+```
+
+- **When it is used:** a temporary failure (network, throttling, a Microsoft outage) is retried as
+  usual until the mail has waited `efter_minutter`. If Microsoft rejects the mail or the
+  credentials outright, the fallback is used immediately. If the fallback also fails, the normal
+  retry schedule continues.
+- **Sender:** the From header is rewritten to the fallback account, since Gmail only allows its own
+  address. The Bcc header is removed, and every envelope recipient still gets the mail.
+- **Notification:** `fejl_til` gets at most one notice every 6 hours saying that the fallback is in use.
+- **Gmail:** turn on 2-step verification for the account and create an app password at
+  <https://myaccount.google.com/apppasswords>. The normal account password does not work. The
+  spaces in the app password are optional. Gmail allows about 25 MB per message.
+- **Testing:** in the GUI, use *Microsoft 365 → Reserve*. From the command line, run
+  `smtp-graph tjek`, which also tests the fallback login, and
+  `smtp-graph test --til you@example.com --reserve`.
 
 ## Windows
 
@@ -176,8 +208,8 @@ Run the installer again to start the service once Microsoft 365 is set up.
 |---|---|
 | *(none)* | Run in the foreground (Ctrl+C stops) |
 | `ny-config` | Write a configuration file with explanations |
-| `tjek` | Show the configuration and test the login to Microsoft |
-| `test --til <addr> [--stor]` | Send a test mail directly (`--stor`: 5 MB attachment) |
+| `tjek` | Show the configuration and test the login to Microsoft and the fallback relay |
+| `test --til <addr> [--stor] [--reserve]` | Send a test mail directly (`--stor`: 5 MB attachment, `--reserve`: through the fallback relay) |
 | `opsaet --postkasse <addr> --navn <name> [--opret-delt] [--kun-send]` | Administrator setup in the browser |
 | `login [--send-fra <addr>]` | Sign in as the mailbox (the "user" method) |
 | `koe` | List waiting and failed mail |

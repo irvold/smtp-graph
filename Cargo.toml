@@ -1,6 +1,6 @@
 [package]
 name = "smtp-graph"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Tager imod SMTP (fx fra scannere) og sender videre gennem Microsoft Graph"
 license = "MIT"
@@ -35,6 +35,7 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 if-addrs = { version = "0.13", optional = true }
 toml_edit = "0.22"
 rsa = { version = "0.9", features = ["getrandom", "pem"] }
+lettre = { version = "0.11.24", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "hostname"] }
 
 [features]
 default = ["gui"]

@@ -14,6 +14,9 @@ pub struct Config {
     pub graph: GraphCfg,
     #[serde(default)]
     pub koe: KoeCfg,
+    /// Reserve, når Microsoft ikke kan sende (fx Gmail). Tom server = ingen reserve.
+    #[serde(default)]
+    pub reserve: crate::reserve::ReserveCfg,
     /// Mappen, config-filen ligger i. Kø, log og certifikat lægges relativt til den.
     #[serde(skip)]
     pub mappe: PathBuf,
@@ -214,6 +217,7 @@ impl Config {
         for n in &self.smtp.tilladte_ip {
             parse_net(n).with_context(|| format!("tilladte_ip: »{n}« er ikke et net"))?;
         }
+        self.reserve.tjek()?;
         if self.smtp.lyt.is_empty() && self.smtp.lyt_tls.is_empty() {
             bail!("smtp.lyt og smtp.lyt_tls er begge tomme");
         }
@@ -366,4 +370,16 @@ toerlob = false
 [koe]
 mappe = "koe"
 max_timer = 48
+
+# Reserve: kan Microsoft ikke sende, går mailen gennem en anden SMTP-server i stedet.
+# Gmail: slå totrinsbekræftelse til på kontoen, og lav en app-adgangskode på
+# https://myaccount.google.com/apppasswords. Afsenderen bliver Gmail-adressen.
+#[reserve]
+#server = "smtp.gmail.com"
+#port = 587
+#tls = "starttls"            # "starttls" (587), "tls" (465) eller "ingen"
+#bruger = "firma@gmail.com"
+#adgangskode = "abcd efgh ijkl mnop"
+#fra = "firma@gmail.com"     # tom = bruger
+#efter_minutter = 15         # brug reserven, når mailen har ventet så længe (0 = med det samme)
 "#;

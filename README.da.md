@@ -20,8 +20,36 @@ Scanner ──SMTP──> smtp-graph.exe ──HTTPS (Graph)──> Microsoft 36
 - Kun konvolutmodtagerne (RCPT TO) får mailen; ekstra modtagere sendes som Bcc.
 - Diskkø med genforsøg (1, 2, 5, 10, 30 min, derefter hver time i 48 timer). Opgivne mails lægges i
   `koe\fejlet`, og `fejl_til` får besked.
+- Reserve (`[reserve]`): kan Microsoft ikke sende, går mailen gennem en anden SMTP-server, fx Gmail med app-adgangskode (se herunder).
 - `tilladte_modtagere` kan låse den til fx kun firmaets eget domæne.
 - Kører som Windows-tjeneste med genstart ved fejl og daglig log i `log\`.
+
+## Reserve: Gmail eller en anden SMTP-server
+
+Kan Microsoft 365 ikke sende (nedbrud, udløbet hemmelighed, slettet app), sendes mailen gennem en
+anden SMTP-server i stedet. Sættes op i GUI'en under Microsoft 365 → Reserve, eller i filen:
+
+```toml
+[reserve]
+server = "smtp.gmail.com"
+port = 587
+tls = "starttls"            # "starttls" (587), "tls" (465) eller "ingen" (kun lokalt net)
+bruger = "firma@gmail.com"
+adgangskode = "abcd efgh ijkl mnop"
+fra = "firma@gmail.com"     # tom = bruger
+efter_minutter = 15         # brug reserven, når mailen har ventet så længe (0 = med det samme)
+```
+
+- **Midlertidige fejl** (net, nedbrud hos Microsoft) prøves igen som normalt, til mailen har ventet
+  `efter_minutter`. Afviser Microsoft mailen eller adgangen helt, bruges reserven med det samme.
+  Fejler reserven også, fortsætter køen som normalt.
+- **Afsenderen** skrives om til reserve-kontoen, fordi Gmail kun tillader den. Bcc-feltet fjernes,
+  og alle konvolutmodtagere får stadig mailen.
+- **Besked:** `fejl_til` får højst én besked hver 6. time om, at reserven er i brug.
+- **Gmail:** slå totrinsbekræftelse til, og lav en app-adgangskode på https://myaccount.google.com/apppasswords.
+  Kontoens almindelige adgangskode virker ikke, og Gmail tager ca. 25 MB pr. mail.
+- **Afprøv:** `smtp-graph tjek` prøver også login hos reserven, og `smtp-graph test --til dig@firma.dk --reserve`
+  sender en testmail gennem den.
 
 ## Opsætning med programmet (GUI)
 
@@ -142,8 +170,8 @@ Tip: Prøv først med `toerlob = true`. Så gemmes mails i `koe\toerlob` i stede
 |---|---|
 | `smtp-graph.exe` | Kør i konsollen (Ctrl+C stopper) |
 | `ny-config` | Skriv en indstillingsfil med forklaringer |
-| `tjek` | Vis opsætningen og prøv login hos Microsoft |
-| `test --til <adr> [--stor]` | Send en testmail direkte (med `--stor` en 5 MB vedhæftning) |
+| `tjek` | Vis opsætningen og prøv login hos Microsoft og reserven |
+| `test --til <adr> [--stor] [--reserve]` | Send en testmail direkte (`--stor`: 5 MB vedhæftning, `--reserve`: gennem reserven) |
 | `koe` | Vis ventende og opgivne mails |
 | `installer` / `afinstaller` | Windows-tjenesten |
 

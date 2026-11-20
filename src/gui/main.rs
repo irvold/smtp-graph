@@ -194,6 +194,39 @@ pub struct MsForm {
     pub vis_avanceret: bool,
 }
 
+/// Reserve-afsnittet under Microsoft 365.
+pub struct ReserveForm {
+    pub server: String,
+    pub port: String,
+    pub tls: smtp_graph::reserve::ReserveTls,
+    pub bruger: String,
+    pub adgangskode: String,
+    pub fra: String,
+    pub efter: String,
+    pub vis_kode: bool,
+}
+
+impl Default for ReserveForm {
+    fn default() -> Self {
+        ReserveForm::fra(&smtp_graph::reserve::ReserveCfg::default())
+    }
+}
+
+impl ReserveForm {
+    fn fra(r: &smtp_graph::reserve::ReserveCfg) -> Self {
+        ReserveForm {
+            server: r.server.clone(),
+            port: r.port.to_string(),
+            tls: r.tls,
+            bruger: r.bruger.clone(),
+            adgangskode: r.adgangskode.clone(),
+            fra: r.fra.clone(),
+            efter: r.efter_minutter.to_string(),
+            vis_kode: false,
+        }
+    }
+}
+
 enum Bekraeft {
     Slet(Status, String),
     Afinstaller,
@@ -206,6 +239,7 @@ struct App {
     cfg: Option<Config>,
     cfg_fejl: Option<String>,
     form: Formular,
+    reserve: ReserveForm,
     ms: MsForm,
     tjeneste: Result<Option<ServiceState>, String>,
     sidst: Instant,
@@ -236,6 +270,7 @@ impl App {
             cfg: None,
             cfg_fejl: None,
             form: Formular::default(),
+            reserve: ReserveForm::default(),
             ms: MsForm { navn: whoami_navn(), ..Default::default() },
             tjeneste: Ok(None),
             sidst: Instant::now() - Duration::from_secs(60),
@@ -265,6 +300,7 @@ impl App {
         match Config::laes(&self.cfg_fil) {
             Ok(mut c) => {
                 self.form = Formular::fra(&c);
+                self.reserve = ReserveForm::fra(&c.reserve);
                 if let Ok(a) = c.graph_adgang() {
                     if let smtp_graph::config::Noegle::Hemmelighed(s) = &a.noegle {
                         self.ms.m_postkasse = a.postkasse.clone();
@@ -613,6 +649,13 @@ impl App {
                         ui.label(RichText::new(format!("{u} (om {dage} dage)")).color(farve));
                         ui.end_row();
                     }
+                    ui.label(RichText::new("Reserve").strong());
+                    if c2.reserve.aktiv() {
+                        ui.label(format!("{} – efter {} min", c2.reserve.beskrivelse(), c2.reserve.efter_minutter));
+                    } else {
+                        ui.label(RichText::new("ingen (sæt op under Microsoft 365)").weak());
+                    }
+                    ui.end_row();
                 });
             }
             None => {
@@ -773,6 +816,83 @@ impl App {
                 }
             });
             ui.label(RichText::new("Testen bruger de gemte indstillinger og går direkte til Microsoft (ikke gennem køen). Nye rettigheder i Exchange kan tage op til 2 timer.").weak());
+        });
+
+        ui.add_space(10.0);
+        ui.heading("Reserve, hvis Microsoft ikke kan sende");
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.label(RichText::new("Kan Microsoft ikke sende, går mailen gennem en anden SMTP-server i stedet – fx Gmail med en app-adgangskode. Modtagerne ser så reserve-kontoens adresse som afsender.").weak());
+            ui.add_space(4.0);
+            let r = &mut self.reserve;
+            egui::Grid::new("reserve").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
+                ui.label("Server");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut r.server).hint_text("smtp.gmail.com (tom = ingen reserve)").desired_width(260.0));
+                    if ui.button("Udfyld til Gmail").clicked() {
+                        r.server = "smtp.gmail.com".into();
+                        r.port = "587".into();
+                        r.tls = smtp_graph::reserve::ReserveTls::Starttls;
+                    }
+                });
+                ui.end_row();
+                ui.label("Port og kryptering");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut r.port).desired_width(60.0));
+                    use smtp_graph::reserve::ReserveTls as T;
+                    egui::ComboBox::from_id_salt("reserve_tls")
+                        .selected_text(match r.tls {
+                            T::Starttls => "STARTTLS (587)",
+                            T::Tls => "TLS fra start (465)",
+                            T::Ingen => "Ingen (kun lokalt net)",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut r.tls, T::Starttls, "STARTTLS (587)");
+                            ui.selectable_value(&mut r.tls, T::Tls, "TLS fra start (465)");
+                            ui.selectable_value(&mut r.tls, T::Ingen, "Ingen (kun lokalt net)");
+                        });
+                });
+                ui.end_row();
+                ui.label("Bruger");
+                ui.add(egui::TextEdit::singleline(&mut r.bruger).hint_text("firma@gmail.com").desired_width(260.0));
+                ui.end_row();
+                ui.label("Adgangskode");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut r.adgangskode).password(!r.vis_kode).hint_text("app-adgangskode").desired_width(260.0));
+                    ui.checkbox(&mut r.vis_kode, "vis");
+                });
+                ui.end_row();
+                ui.label("Afsender");
+                ui.add(egui::TextEdit::singleline(&mut r.fra).hint_text("tom = bruger").desired_width(260.0));
+                ui.end_row();
+                ui.label("Brug reserven efter");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut r.efter).desired_width(50.0));
+                    ui.label("minutter (0 = med det samme)");
+                });
+                ui.end_row();
+            });
+            if r.server.to_ascii_lowercase().contains("gmail") {
+                ui.label(RichText::new("Gmail: slå totrinsbekræftelse til på kontoen, og lav en app-adgangskode på myaccount.google.com/apppasswords. Kontoens almindelige adgangskode virker ikke.").weak());
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Gem reserve").clicked() {
+                    match gem::gem_reserve(&self.cfg_fil, &self.reserve) {
+                        Ok(_) => {
+                            self.genindlaes();
+                            self.info(true, "Reserven er gemt. Genstart tjenesten, så den bruges.");
+                        }
+                        Err(e) => self.info(false, e),
+                    }
+                }
+                if ui.button("Prøv login hos reserven").clicked() {
+                    self.reserve_job(None);
+                }
+                let kan = self.ms.test_til.contains('@');
+                if ui.add_enabled(kan, egui::Button::new("Send testmail via reserven")).on_hover_text("Til adressen under Afprøv").clicked() {
+                    self.reserve_job(Some(self.ms.test_til.trim().to_string()));
+                }
+            });
+            ui.label(RichText::new("Prøv og send bruger de gemte indstillinger – gem først.").weak());
         });
 
         ui.add_space(10.0);
@@ -997,6 +1117,30 @@ impl App {
                         .await
                         .map_err(|e| e.tekst)?;
                     s(format!("Testmail sendt til {til} ({vej}, {} kB)", raw.len() / 1024));
+                }
+                Ok(())
+            })
+        });
+    }
+
+    fn reserve_job(&mut self, til: Option<String>) {
+        let fil = self.cfg_fil.clone();
+        let titel = if til.is_some() { "Sender testmail via reserven" } else { "Prøver login hos reserven" };
+        self.start_job(titel, false, move |s| {
+            let cfg = Config::laes(&fil).map_err(|e| format!("{e:#}"))?;
+            if !cfg.reserve.aktiv() {
+                return Err("Der er ingen reserve gemt".into());
+            }
+            s(format!("Reserve: {}", cfg.reserve.beskrivelse()));
+            let r = smtp_graph::reserve::Reserve::ny(&cfg.reserve, &cfg.smtp.vaertsnavn).map_err(|e| format!("{e:#}"))?;
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+            rt.block_on(async {
+                r.proev().await.map_err(|e| e.tekst)?;
+                s("Login hos reserven: OK".into());
+                if let Some(til) = til {
+                    let raw = smtp_graph::testmail(&til, false);
+                    let vej = r.send(&raw, "", &[til.clone()], cfg.graph.afsender_navn.as_deref(), false).await.map_err(|e| e.tekst)?;
+                    s(format!("Testmail sendt til {til} ({vej})"));
                 }
                 Ok(())
             })

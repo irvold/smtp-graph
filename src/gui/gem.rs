@@ -1,6 +1,6 @@
 //! Gem ændringer i smtp-graph.toml uden at miste kommentarerne (toml_edit).
 
-use crate::{Formular, MsForm};
+use crate::{Formular, MsForm, ReserveForm};
 use smtp_graph::config::{Config, SKABELON};
 use std::path::Path;
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table};
@@ -86,6 +86,29 @@ pub fn gem_smtp(fil: &Path, f: &Formular) -> Result<(), String> {
     skriv(fil, &doc)
 }
 
+pub fn gem_reserve(fil: &Path, r: &ReserveForm) -> Result<(), String> {
+    let mut doc = laes(fil)?;
+    if r.server.trim().is_empty() {
+        doc.remove("reserve");
+    } else {
+        let port = r.port.trim().parse::<u16>().map_err(|_| "Port skal være et tal".to_string())?;
+        let efter = r.efter.trim().parse::<i64>().map_err(|_| "»Brug reserven efter« skal være et antal minutter".to_string())?;
+        let t = tabel(&mut doc, "reserve");
+        t["server"] = value(r.server.trim());
+        t["port"] = value(port as i64);
+        t["tls"] = value(r.tls.navn());
+        tekst_eller_fjern(t, "bruger", &r.bruger);
+        if r.adgangskode.is_empty() {
+            t.remove("adgangskode");
+        } else {
+            t["adgangskode"] = value(r.adgangskode.as_str());
+        }
+        tekst_eller_fjern(t, "fra", &r.fra);
+        t["efter_minutter"] = value(efter);
+    }
+    skriv(fil, &doc)
+}
+
 pub fn gem_app_kode(fil: &Path, kode: &str) -> Result<(), String> {
     smtp_graph::skriv::app_kode(fil, kode).map_err(|e| format!("{e:#}"))
 }
@@ -164,4 +187,28 @@ mod test {
         assert!(gem_smtp(&fil, &f).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
+
+    #[test]
+    fn gemmer_reserve() {
+        let mappe = std::env::temp_dir().join(format!("sg-reserve-{}", std::process::id()));
+        std::fs::create_dir_all(&mappe).unwrap();
+        let fil = mappe.join("smtp-graph.toml");
+        std::fs::write(&fil, SKABELON).unwrap();
+        let mut r = ReserveForm::default();
+        r.server = "smtp.gmail.com".into();
+        r.bruger = "firma@gmail.com".into();
+        r.adgangskode = "abcd efgh ijkl mnop".into();
+        r.efter = "5".into();
+        gem_reserve(&fil, &r).unwrap();
+        let c = Config::laes(&fil).unwrap();
+        assert_eq!(c.reserve.server, "smtp.gmail.com");
+        assert_eq!(c.reserve.port, 587);
+        assert_eq!(c.reserve.fra_adresse(), "firma@gmail.com");
+        assert_eq!(c.reserve.efter_minutter, 5);
+        r.server.clear();
+        gem_reserve(&fil, &r).unwrap();
+        assert!(!Config::laes(&fil).unwrap().reserve.aktiv());
+        let _ = std::fs::remove_dir_all(&mappe);
+    }
+
 }

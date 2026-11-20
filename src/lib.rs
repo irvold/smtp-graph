@@ -9,6 +9,7 @@ pub mod linux;
 pub mod mime;
 pub mod oauth;
 pub mod opsaet;
+pub mod reserve;
 #[cfg(windows)]
 pub mod service;
 pub mod skriv;
@@ -123,7 +124,14 @@ pub async fn koer(mut cfg: Config, mut stop: watch::Receiver<bool>) -> Result<()
     for adr in f.cfg.smtp.lyt_tls.clone() {
         opgaver.spawn(smtp::lyt(f.clone(), adr, true));
     }
-    let afsender = tokio::spawn(afsend(f.clone(), graph, stop.clone()));
+    let reserve = if f.cfg.reserve.aktiv() && graph.is_some() {
+        let r = reserve::Reserve::ny(&f.cfg.reserve, &f.cfg.smtp.vaertsnavn)?;
+        tracing::info!("reserve: {} (efter {} min)", f.cfg.reserve.beskrivelse(), f.cfg.reserve.efter_minutter);
+        Some(r)
+    } else {
+        None
+    };
+    let afsender = tokio::spawn(afsend(f.clone(), graph, reserve, stop.clone()));
 
     tokio::select! {
         r = opgaver.join_next() => {
@@ -140,8 +148,10 @@ pub async fn koer(mut cfg: Config, mut stop: watch::Receiver<bool>) -> Result<()
     Ok(())
 }
 
-async fn afsend(f: Arc<smtp::Faelles>, graph: Option<graph::Graph>, mut stop: watch::Receiver<bool>) {
+async fn afsend(f: Arc<smtp::Faelles>, graph: Option<graph::Graph>, reserve: Option<reserve::Reserve>, mut stop: watch::Receiver<bool>) {
     let cfg = &f.cfg;
+    // Hvornår fejl_til sidst fik besked om, at reserven er i brug (højst hver 6. time).
+    let mut sidst_varslet: Option<std::time::Instant> = None;
     loop {
         let klar = match f.koe.klar().await {
             Ok(k) => k,
@@ -168,26 +178,75 @@ async fn afsend(f: Arc<smtp::Faelles>, graph: Option<graph::Graph>, mut stop: wa
                 continue;
             };
             post.forsoeg += 1;
-            match g.send(&raw, &post.fra, &post.til, cfg.graph.afsender_navn.as_deref(), cfg.graph.svar_til_original).await {
+            let navn = cfg.graph.afsender_navn.as_deref();
+            let e = match g.send(&raw, &post.fra, &post.til, navn, cfg.graph.svar_til_original).await {
                 Ok(vej) => {
                     tracing::info!("{}: sendt til {} ({vej}, forsøg {})", post.id, post.til.join(", "), post.forsoeg);
                     f.koe.faerdig(&post.id).await;
+                    continue;
                 }
-                Err(e) => {
-                    let gammel = Utc::now() - post.modtaget > chrono::Duration::hours(cfg.koe.max_timer as i64);
-                    post.sidste_fejl = Some(e.tekst.clone());
-                    if e.midlertidig && !gammel {
-                        post.naeste = Utc::now() + koe::Koe::pause(post.forsoeg);
-                        tracing::warn!("{}: forsøg {} fejlede, prøver igen {}: {e}", post.id, post.forsoeg, post.naeste.format("%H:%M"));
-                        let _ = f.koe.gem(&post).await;
-                    } else {
-                        tracing::error!("{}: opgivet efter {} forsøg: {e}", post.id, post.forsoeg);
-                        let _ = f.koe.flyt(&post, "fejlet").await;
-                        if let Some(adm) = cfg.graph.fejl_til.as_deref() {
-                            let besked = fejlbesked(adm, &post);
-                            if let Err(e2) = g.send(&besked, "", &[adm.to_string()], cfg.graph.afsender_navn.as_deref(), false).await {
-                                tracing::error!("kunne heller ikke give besked til {adm}: {e2}");
+                Err(e) => e,
+            };
+            post.sidste_fejl = Some(e.tekst.clone());
+            let mut midlertidig = e.midlertidig;
+
+            // Reserven: med det samme, hvis Microsoft afviser helt, ellers når mailen har ventet længe nok.
+            if let Some(r) = reserve.as_ref() {
+                let ventet = Utc::now() - post.modtaget;
+                if !e.midlertidig || ventet >= chrono::Duration::minutes(r.cfg().efter_minutter as i64) {
+                    match r.send(&raw, &post.fra, &post.til, navn, cfg.graph.svar_til_original).await {
+                        Ok(vej) => {
+                            tracing::warn!(
+                                "{}: Microsoft fejlede ({e}) – sendt til {} via {vej} (forsøg {})",
+                                post.id,
+                                post.til.join(", "),
+                                post.forsoeg
+                            );
+                            f.koe.faerdig(&post.id).await;
+                            if let Some(adm) = cfg.graph.fejl_til.as_deref() {
+                                if sidst_varslet.is_none_or(|t| t.elapsed() > Duration::from_secs(6 * 3600)) {
+                                    sidst_varslet = Some(std::time::Instant::now());
+                                    let besked = reservebesked(adm, &e.tekst, &r.cfg().beskrivelse());
+                                    if let Err(e2) = r.send(&besked, "", &[adm.to_string()], navn, false).await {
+                                        tracing::error!("kunne ikke give {adm} besked om reserven: {e2}");
+                                    }
+                                }
                             }
+                            continue;
+                        }
+                        Err(e2) => {
+                            tracing::warn!("{}: reserven fejlede også: {e2}", post.id);
+                            post.sidste_fejl = Some(format!("{}; {}", e.tekst, e2.tekst));
+                            midlertidig = e.midlertidig || e2.midlertidig;
+                        }
+                    }
+                }
+            }
+
+            let gammel = Utc::now() - post.modtaget > chrono::Duration::hours(cfg.koe.max_timer as i64);
+            if midlertidig && !gammel {
+                post.naeste = Utc::now() + koe::Koe::pause(post.forsoeg);
+                tracing::warn!(
+                    "{}: forsøg {} fejlede, prøver igen {}: {}",
+                    post.id,
+                    post.forsoeg,
+                    post.naeste.format("%H:%M"),
+                    post.sidste_fejl.as_deref().unwrap_or("")
+                );
+                let _ = f.koe.gem(&post).await;
+            } else {
+                tracing::error!("{}: opgivet efter {} forsøg: {}", post.id, post.forsoeg, post.sidste_fejl.as_deref().unwrap_or(""));
+                let _ = f.koe.flyt(&post, "fejlet").await;
+                if let Some(adm) = cfg.graph.fejl_til.as_deref() {
+                    let besked = fejlbesked(adm, &post);
+                    if let Err(e2) = g.send(&besked, "", &[adm.to_string()], navn, false).await {
+                        match reserve.as_ref() {
+                            Some(r) => {
+                                if let Err(e3) = r.send(&besked, "", &[adm.to_string()], navn, false).await {
+                                    tracing::error!("kunne heller ikke give besked til {adm}: {e2}; {e3}");
+                                }
+                            }
+                            None => tracing::error!("kunne heller ikke give besked til {adm}: {e2}"),
                         }
                     }
                 }
@@ -202,6 +261,18 @@ async fn afsend(f: Arc<smtp::Faelles>, graph: Option<graph::Graph>, mut stop: wa
             _ = stop.wait_for(|s| *s) => return,
         }
     }
+}
+
+fn reservebesked(til: &str, fejl: &str, reserve: &str) -> Vec<u8> {
+    format!(
+        "To: <{til}>\r\nSubject: SMTP-Graph sender via reserven\r\nDate: {}\r\nMIME-Version: 1.0\r\n\
+         Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n\
+         Microsoft kunne ikke sende, så mails fra scanneren går nu gennem reserven ({reserve}).\r\n\r\n\
+         Fejlen fra Microsoft: {fejl}\r\n\r\n\
+         Modtagerne ser reserve-adressen som afsender. Du får højst én besked hver 6. time.\r\n",
+        Utc::now().to_rfc2822()
+    )
+    .into_bytes()
 }
 
 fn fejlbesked(til: &str, p: &koe::Post) -> Vec<u8> {

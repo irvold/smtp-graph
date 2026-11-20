@@ -158,6 +158,29 @@ pub fn omskriv(raw: &[u8], env_fra: &str, konvolut: &[String], afs: &Afsender) -
     ud
 }
 
+/// Fjern et header-felt (med foldede fortsættelseslinjer), fx Bcc før afsendelse over SMTP,
+/// hvor modtagerne styres af konvolutten og Bcc-feltet ellers ville blive vist.
+pub fn uden_felt(raw: &[u8], navn: &str) -> Vec<u8> {
+    let slut_hoved = find(raw, b"\r\n\r\n").map(|i| i + 2).unwrap_or(raw.len());
+    let mut ud = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    let mut spring = false;
+    while i < slut_hoved {
+        let slut = find(&raw[i..slut_hoved], b"\r\n").map(|j| i + j + 2).unwrap_or(slut_hoved);
+        let linje = &raw[i..slut];
+        if !matches!(linje.first(), Some(b' ' | b'\t')) {
+            let felt = linje.split(|c| *c == b':').next().unwrap_or_default();
+            spring = linje.contains(&b':') && String::from_utf8_lossy(felt).trim().eq_ignore_ascii_case(navn);
+        }
+        if !spring {
+            ud.extend_from_slice(linje);
+        }
+        i = slut;
+    }
+    ud.extend_from_slice(&raw[slut_hoved..]);
+    ud
+}
+
 pub struct Vedhaeftning {
     pub navn: String,
     pub type_: String,
@@ -233,6 +256,14 @@ fn find(h: &[u8], n: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod test {
+
+    #[test]
+    fn fjerner_bcc_med_foldede_linjer() {
+        let raw = b"From: <a@b.dk>\r\nBcc: <x@y.dk>,\r\n <z@y.dk>\r\nSubject: Hej\r\n\r\nBcc: i kroppen bliver\r\n";
+        let ud = String::from_utf8(uden_felt(raw, "bcc")).unwrap();
+        assert_eq!(ud, "From: <a@b.dk>\r\nSubject: Hej\r\n\r\nBcc: i kroppen bliver\r\n");
+    }
+
     use super::*;
 
     const MAIL: &[u8] = b"From: Scanner <scan@lokal>\r\nTo: Anna <anna@firma.dk>, x@ude.dk\r\nSubject: Scan\r\nMIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nHej\r\n";
